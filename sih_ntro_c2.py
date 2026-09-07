@@ -60,36 +60,33 @@ def calculate_orbital_blind_spots(lat, lon, hours_back):
 @st.cache_data
 def solve_adjoint_pde(D, dt, steps, dx=100.0, dy=100.0):
     GRID = 80
-    Y, X = np.mgrid[0:GRID, 0:GRID]
-    
-    u_grid = 0.5 * np.sin(np.pi * Y / GRID)
-    v_grid = -0.3 * np.cos(np.pi * X / GRID)
-    
+    # Initialize the target source polygon
     lam = np.zeros((GRID, GRID))
     lam[35:45, 35:45] = 1.0 
     
-    for _ in range(int(steps)):
-        lam_new = np.copy(lam)
-        lam_center = lam[1:-1, 1:-1]
-        u_center = u_grid[1:-1, 1:-1]
-        v_center = v_grid[1:-1, 1:-1]
-        
-        dlam_dx = np.where(u_center < 0, 
-                           (lam[1:-1, 2:] - lam_center) / dx, 
-                           (lam_center - lam[1:-1, :-2]) / dx)
-        dlam_dy = np.where(v_center < 0, 
-                           (lam[2:, 1:-1] - lam_center) / dy, 
-                           (lam_center - lam[:-2, 1:-1]) / dy)
-        adv = u_center * dlam_dx + v_center * dlam_dy
-        
-        diff_x = (lam[1:-1, 2:] - 2*lam_center + lam[1:-1, :-2]) / (dx**2)
-        diff_y = (lam[2:, 1:-1] - 2*lam_center + lam[:-2, 1:-1]) / (dy**2)
-        diff = D * (diff_x + diff_y)
-        
-        lam_new[1:-1, 1:-1] = lam_center + dt * (-adv - diff)
-        lam = lam_new
-        
-    return lam / (np.max(lam) + 1e-9)
+    # 1. Transform to Wavenumber Frequency Domain (s-domain proxy)
+    kx = np.fft.fftfreq(GRID, d=dx) * 2 * np.pi
+    ky = np.fft.fftfreq(GRID, d=dy) * 2 * np.pi
+    KX, KY = np.meshgrid(kx, ky)
+    
+    # Assumed regional vector velocities for the Arabian Sea sector
+    U, V = 0.5, -0.3 
+    T = dt * steps
+    
+    # 2. Build the Exact Analytical Transfer Function
+    # Diffusion decays quadratically, Advection shifts phase via imaginary roots
+    s_operator = -D * (KX**2 + KY**2) - 1j * (U * KX + V * KY)
+    
+    # 3. Execute the Inverse Spectral PDE
+    lam_hat = np.fft.fft2(lam)
+    
+    # Apply the exact time-evolution exponential matrix
+    lam_hat_final = lam_hat * np.exp(s_operator * T)
+    
+    # 4. Inverse Transform back to Spatial Domain
+    lam_final = np.real(np.fft.ifft2(lam_hat_final))
+    
+    return np.maximum(lam_final, 0) / (np.max(lam_final) + 1e-9)
 
 # ==========================================
 # 3. DASHBOARD UI BUILDER
