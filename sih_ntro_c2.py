@@ -35,7 +35,7 @@ st.markdown("""
 # ==========================================
 # 1. LIVE AISSTREAM.IO WEBSOCKET PIPELINE
 # ==========================================
-async def _async_harvest_ais(api_key, min_lat, min_lon, max_lat, max_lon, timeout=2.0):
+async def _async_harvest_ais(api_key, min_lat, min_lon, max_lat, max_lon, timeout=5.0):
     url = "wss://stream.aisstream.io/v0/stream"
     sub_payload = {
         "APIKey": api_key,
@@ -44,18 +44,19 @@ async def _async_harvest_ais(api_key, min_lat, min_lon, max_lat, max_lon, timeou
     }
     vessels = []
     try:
-        async with websockets.connect(url, ping_timeout=3) as ws:
+        async with websockets.connect(url, ping_timeout=5, close_timeout=2) as ws:
             await ws.send(json.dumps(sub_payload))
             t_end = asyncio.get_event_loop().time() + timeout
-            while asyncio.get_event_loop().time() < t_end and len(vessels) < 8:
+            while asyncio.get_event_loop().time() < t_end and len(vessels) < 15:
                 try:
-                    raw = await asyncio.wait_for(ws.recv(), timeout=0.6)
+                    raw = await asyncio.wait_for(ws.recv(), timeout=1.8)
                     pkt = json.loads(raw)
                     if pkt.get("MessageType") == "PositionReport":
                         pos = pkt["Message"]["PositionReport"]
                         meta = pkt.get("MetaData", {})
+                        ship_name = (meta.get("ShipName") or f"MMSI-{meta.get('MMSI')}").strip()
                         vessels.append({
-                            "Vessel": (meta.get("ShipName") or f"MMSI-{meta.get('MMSI')}").strip(),
+                            "Vessel": ship_name if ship_name else f"VESSEL-{meta.get('MMSI', 'UNKNOWN')}",
                             "IMO": meta.get("MMSI", 0),
                             "Type": "Live Commercial",
                             "Lat": float(pos.get("Latitude", 0.0)),
@@ -66,12 +67,12 @@ async def _async_harvest_ais(api_key, min_lat, min_lon, max_lat, max_lon, timeou
                             "Source": "AISStream.io (Live)"
                         })
                 except asyncio.TimeoutError:
-                    break
-    except Exception:
-        pass
+                    continue
+    except Exception as e:
+        print(f"[AISStream Connection Log]: {e}")
     return vessels
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=25)
 def fetch_live_ais_feed(api_key, lat, lon):
     if not WEBSOCKETS_INSTALLED or not api_key:
         return []
@@ -83,7 +84,8 @@ def fetch_live_ais_feed(api_key, lat, lon):
         vessels = loop.run_until_complete(_async_harvest_ais(api_key, min_lat, min_lon, max_lat, max_lon))
         loop.close()
         return vessels
-    except Exception:
+    except Exception as e:
+        print(f"[Loop Exception]: {e}")
         return []
 
 # ==========================================
@@ -217,16 +219,12 @@ with col1:
     """, unsafe_allow_html=True)
 
 with col2:
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🗺️ Tactical Map", "🚢 AIS Traffic Corridor", "🖼️ SAR Image Analysis", "🛰️ SGP4 Coverage", "⚖️ Prosecution Ledger"])
-    
     origin_lat = target_lat - (v_drift * hours * 3600 / 111000.0)
     origin_lon = target_lon - (u_drift * hours * 3600 / (111000.0 * np.cos(np.deg2rad(target_lat))))
 
-
-# ==========================================
+    # ==========================================
     # INTERACTIVE VESSEL FORENSIC AUDITOR
     # ==========================================
-    # Aggregate all active ships into an inspection list
     selectable_vessels = [
         {"name": "MV PACIFIC TITAN (Primary Suspect)", "lat": target_lat, "lon": target_lon, "speed": 3.8, "imo": 9845123},
         {"name": "ICGS SAMARTH (Patrol Interceptor)", "lat": target_lat + 0.18, "lon": target_lon - 0.15, "speed": 21.0, "imo": 4190890},
@@ -249,17 +247,17 @@ with col2:
     a_dist = np.sin(d_lat/2)**2 + np.cos(np.radians(origin_lat)) * np.cos(np.radians(target_vessel["lat"])) * np.sin(d_lon/2)**2
     dist_to_origin_km = 6371.0 * 2 * np.arctan2(np.sqrt(a_dist), np.sqrt(1 - a_dist))
 
-    # Audit scoring
+    # Audit evaluation
     is_speed_anomalous = 2.0 <= target_vessel["speed"] <= 6.0
     spatial_match = dist_to_origin_km <= 15.0
 
     if spatial_match and is_speed_anomalous:
         verdict = "🚨 CRITICAL PROBABLE SOURCE (Speed anomaly within Advection Plume)"
-        verdict_color = "red"
+        verdict_color = "#ff3333"
         audit_conf = 98.7
     elif spatial_match and not is_speed_anomalous:
         verdict = "⚠️ TRANSITING ADVECTION PATH (Normal cruising speed)"
-        verdict_color = "orange"
+        verdict_color = "#f59e0b"
         audit_conf = 34.2
     else:
         verdict = "✅ EXONERATED (Outside hydrodynamic advection zone)"
@@ -267,17 +265,16 @@ with col2:
         audit_conf = 0.4
 
     st.markdown(f"""
-    <div style="background-color:#161f30; padding:10px; border-radius:5px; border-left: 4px solid {verdict_color}; margin-bottom:15px;">
+    <div style="background-color:#161f30; padding:12px; border-radius:5px; border-left: 4px solid {verdict_color}; margin-bottom:15px;">
         <b>Forensic Audit for {target_vessel['name']}:</b> {verdict}<br>
         • Distance to Inferred Spill Epicenter: <code>{dist_to_origin_km:.1f} km</code> | Speed: <code>{target_vessel['speed']} kts</code> | Attribution Probability: <b>{audit_conf}%</b>
     </div>
     """, unsafe_allow_html=True)
 
-
-
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🗺️ Tactical Map", "🚢 AIS Traffic Corridor", "🖼️ SAR Image Analysis", "🛰️ SGP4 Coverage", "⚖️ Prosecution Ledger"])
 
     with tab1:
-        st.markdown("**Real-Time Geospatial Attribution Layer (Arabian Sea Sector)**")
+        st.markdown("**Real-Time Geospatial Attribution Layer**")
         
         m = folium.Map(
             location=[target_lat, target_lon],
@@ -285,18 +282,6 @@ with col2:
             tiles="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
             attr="Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ"
         )
-
-
-
-        # Highlight selected vessel with an inspection target circle
-        folium.CircleMarker(
-            location=[target_vessel["lat"], target_vessel["lon"]],
-            radius=18,
-            color="#ffff00",
-            weight=3,
-            fill=False,
-            popup=f"INSPECTING: {target_vessel['name']}"
-        ).add_to(m)
         
         # 1. Primary Oil Slick
         slick_radius = int(3000 + (turb * 400))
@@ -339,7 +324,7 @@ with col2:
             icon=folium.Icon(color='green', icon='shield', prefix='fa')
         ).add_to(m)
 
-        # 5. Render Live AISStream Vessels if available, otherwise draw baseline commercial corridor
+        # 5. Render Live AISStream Vessels if active, else baseline corridor
         if live_ships:
             for s in live_ships:
                 folium.Marker(
@@ -365,9 +350,19 @@ with col2:
                 icon=folium.Icon(color='blue', icon='ship', prefix='fa')
             ).add_to(m)
 
+        # 6. Highlight selected vessel with an inspection target circle
+        folium.CircleMarker(
+            location=[target_vessel["lat"], target_vessel["lon"]],
+            radius=18,
+            color="#ffff00",
+            weight=3,
+            fill=False,
+            popup=f"INSPECTING: {target_vessel['name']}"
+        ).add_to(m)
+
         st_folium(m, width=700, height=450)
-        source_label = "Live WebSocket Stream" if live_ships else "Tactical Corridor (Local AIS)"
-        st.caption(f"Fleet overlay: **{source_label}** | Drift: `[{u_drift:.3f}, {v_drift:.3f}] m/s` | Origin resolved via Adjoint PDE.")
+        source_label = f"Live WebSocket ({len(live_ships)} Targets)" if live_ships else "Tactical Corridor Baseline"
+        st.caption(f"Fleet overlay: **{source_label}** | Drift: `[{u_drift:.3f}, {v_drift:.3f}] m/s` | Target Highlighted: `{target_vessel['name']}`.")
 
     with tab2:
         st.markdown("### 🚢 Regional AIS Transponder Telemetry")
@@ -434,13 +429,16 @@ with col2:
         st.markdown("**Tamper-Evident SHA-256 Prosecution Payload**")
         payload = {
             "timestamp_utc": datetime.utcnow().isoformat(),
-            "target_vessel": "MV PACIFIC TITAN (IMO 9845123)",
+            "target_vessel": target_vessel["name"],
+            "target_imo": target_vessel["imo"],
             "backtrack_window_hrs": hours,
             "live_wind_speed_ms": wind_ms,
             "live_wind_direction_deg": wind_dir,
             "calculated_surface_drift_vector": [u_drift, v_drift],
             "turbulence_dispersion": turb,
             "adjoint_peak_coord": [origin_lat, origin_lon],
+            "forensic_audit_verdict": verdict,
+            "attribution_probability": audit_conf,
             "live_ais_source": "aisstream.io (authenticated)",
             "action": "AUTOMATED CARTOSAT-3 TIP-AND-CUE & COAST GUARD INTERCEPTION"
         }
