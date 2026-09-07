@@ -35,12 +35,10 @@ def fetch_marine_weather(lat, lon):
         wind_dir_deg = res["current"]["wind_direction_10m"]
         wind_spd_ms = wind_spd_kmh / 3.6
         rad = np.deg2rad(wind_dir_deg)
-        # Maritime hydrodynamic rule: Ocean surface drift is ~3% of wind speed directed downwind
         u_drift = -wind_spd_ms * np.sin(rad) * 0.03
         v_drift = -wind_spd_ms * np.cos(rad) * 0.03
         return wind_spd_ms, wind_dir_deg, u_drift, v_drift
     except Exception:
-        # Arabian sea seasonal baseline fallback
         return 5.2, 240.0, 0.35, -0.22
 
 # ==========================================
@@ -91,8 +89,6 @@ def solve_adjoint_pde(D, dt, steps, U, V, dx=100.0, dy=100.0):
     KX, KY = np.meshgrid(kx, ky)
     
     T = dt * steps
-    
-    # Exact transfer operator driven by live wind-current velocity vectors
     s_operator = -D * (KX**2 + KY**2) - 1j * (U * KX + V * KY)
     lam_hat = np.fft.fft2(lam)
     lam_hat_final = lam_hat * np.exp(s_operator * T)
@@ -117,7 +113,6 @@ with col1:
     hours = st.slider("Backtrack Window (Hrs)", 1, 12, 6)
     turb = st.slider("Turbulence Dispersion (D)", 0.1, 5.0, 2.5)
     
-    # Fetch live atmospheric conditions
     wind_ms, wind_dir, u_drift, v_drift = fetch_marine_weather(target_lat, target_lon)
     
     st.markdown("### 🌊 Live Atmospheric & Current Feeds")
@@ -126,7 +121,6 @@ with col1:
     - **Drift Vector (U, V):** `[{u_drift:.3f}, {v_drift:.3f}] m/s`
     """)
     
-    # Physical SAR verification check
     if 2.0 <= wind_ms <= 10.0:
         st.success(f"✅ Wind Speed ({wind_ms:.1f} m/s) confirms SAR capillary wave suppression.")
     elif wind_ms < 2.0:
@@ -159,14 +153,18 @@ with col1:
 with col2:
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["🗺️ Tactical Map", "🚢 AIS Traffic Corridor", "🖼️ SAR Image Analysis", "🛰️ SGP4 Coverage", "⚖️ Prosecution Ledger"])
     
-    # Calculate exact origin coordinates driven by windage displacement
     origin_lat = target_lat - (v_drift * hours * 3600 / 111000.0)
     origin_lon = target_lon - (u_drift * hours * 3600 / (111000.0 * np.cos(np.deg2rad(target_lat))))
 
     with tab1:
         st.markdown("**Real-Time Geospatial Attribution Layer (Arabian Sea Sector)**")
         
-        m = folium.Map(location=[target_lat, target_lon], zoom_start=9, tiles="CartoDB dark_matter")
+        m = folium.Map(
+            location=[target_lat, target_lon],
+            zoom_start=9,
+            tiles="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+            attr="Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ"
+        )
         
         slick_radius = int(3000 + (turb * 400))
         folium.Circle(
@@ -179,14 +177,12 @@ with col2:
             popup=f"Detected Slick (Radius: {slick_radius}m | Calibrated D={turb})"
         ).add_to(m)
         
-        # Origin point calculated from Adjoint Spectral Vector
         folium.Marker(
             location=[origin_lat, origin_lon],
-            popup=f"Spectral Backtrack Origin (-{hours} hrs, Wind Drift Vector [{u_drift:.2f}, {v_drift:.2f}])",
+            popup=f"Spectral Backtrack Origin (-{hours} hrs, Drift [{u_drift:.2f}, {v_drift:.2f}])",
             icon=folium.Icon(color='red', icon='bolt', prefix='fa')
         ).add_to(m)
         
-        # Suspect vessel maneuver
         suspect_path = [
             [origin_lat + 0.04, origin_lon - 0.05],
             [origin_lat, origin_lon],
@@ -195,7 +191,6 @@ with col2:
         ]
         folium.PolyLine(suspect_path, color='#ff3333', weight=4, dash_array='5, 10', tooltip="MV PACIFIC TITAN (Evasion Track)").add_to(m)
         
-        # Legitimate commercial vessel tracks in the area
         legit_path_1 = [
             [target_lat - 0.2, target_lon - 0.1],
             [target_lat - 0.05, target_lon + 0.1],
