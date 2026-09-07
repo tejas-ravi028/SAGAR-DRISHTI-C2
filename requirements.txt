@@ -3,3 +3,5 @@ skyfield
 numpy
 pandas
 scipy
+folium
+streamlit-folium
