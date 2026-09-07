@@ -35,6 +35,7 @@ def fetch_marine_weather(lat, lon):
         wind_dir_deg = res["current"]["wind_direction_10m"]
         wind_spd_ms = wind_spd_kmh / 3.6
         rad = np.deg2rad(wind_dir_deg)
+        # Maritime hydrodynamic rule: Ocean surface drift is ~3% of wind speed directed downwind
         u_drift = -wind_spd_ms * np.sin(rad) * 0.03
         v_drift = -wind_spd_ms * np.cos(rad) * 0.03
         return wind_spd_ms, wind_dir_deg, u_drift, v_drift
@@ -166,6 +167,7 @@ with col2:
             attr="Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ"
         )
         
+        # 1. Primary Oil Slick
         slick_radius = int(3000 + (turb * 400))
         folium.Circle(
             location=[target_lat, target_lon],
@@ -177,12 +179,14 @@ with col2:
             popup=f"Detected Slick (Radius: {slick_radius}m | Calibrated D={turb})"
         ).add_to(m)
         
+        # 2. Spectral Time-Reversed Origin Point
         folium.Marker(
             location=[origin_lat, origin_lon],
             popup=f"Spectral Backtrack Origin (-{hours} hrs, Drift [{u_drift:.2f}, {v_drift:.2f}])",
             icon=folium.Icon(color='red', icon='bolt', prefix='fa')
         ).add_to(m)
         
+        # 3. Suspect Rogue Tanker Track & Marker
         suspect_path = [
             [origin_lat + 0.04, origin_lon - 0.05],
             [origin_lat, origin_lon],
@@ -190,17 +194,43 @@ with col2:
             [target_lat, target_lon]
         ]
         folium.PolyLine(suspect_path, color='#ff3333', weight=4, dash_array='5, 10', tooltip="MV PACIFIC TITAN (Evasion Track)").add_to(m)
+        folium.Marker(
+            location=[target_lat, target_lon],
+            popup="MV PACIFIC TITAN (IMO: 9845123) - Throttled 3.8 kts",
+            icon=folium.Icon(color='darkred', icon='ship', prefix='fa')
+        ).add_to(m)
         
-        legit_path_1 = [
+        # 4. Commercial Container Track & Marker
+        cma_path = [
             [target_lat - 0.2, target_lon - 0.1],
             [target_lat - 0.05, target_lon + 0.1],
             [target_lat + 0.1, target_lon + 0.25]
         ]
-        folium.PolyLine(legit_path_1, color='#00ffcc', weight=2, tooltip="CMA CGM MONSOON (Compliant - 16.8 kts)").add_to(m)
-        folium.Marker(location=legit_path_1[-1], popup="CMA CGM MONSOON (Compliant)", icon=folium.Icon(color='cadetblue', icon='ship', prefix='fa')).add_to(m)
+        folium.PolyLine(cma_path, color='#00ffcc', weight=2, tooltip="CMA CGM MONSOON (Compliant - 16.8 kts)").add_to(m)
+        folium.Marker(
+            location=cma_path[-1],
+            popup="CMA CGM MONSOON (Compliant - 16.8 kts)",
+            icon=folium.Icon(color='cadetblue', icon='ship', prefix='fa')
+        ).add_to(m)
+
+        # 5. Bulk Carrier Marker
+        ever_pos = [target_lat - 0.15, target_lon + 0.18]
+        folium.Marker(
+            location=ever_pos,
+            popup="EVER GLORY (Bulk Carrier - 13.4 kts)",
+            icon=folium.Icon(color='blue', icon='ship', prefix='fa')
+        ).add_to(m)
+
+        # 6. Indian Coast Guard Patrol Interceptor Marker
+        icgs_pos = [target_lat + 0.18, target_lon - 0.15]
+        folium.Marker(
+            location=icgs_pos,
+            popup="ICGS SAMARTH (Interception Unit - 21.0 kts)",
+            icon=folium.Icon(color='green', icon='shield', prefix='fa')
+        ).add_to(m)
 
         st_folium(m, width=700, height=450)
-        st.caption(f"Map dynamically links live wind vectors [{u_drift:.3f}, {v_drift:.3f}] m/s with {hours}h spectral time-reversal.")
+        st.caption(f"Tactical fleet overlay displaying active vessels, drift vectors [{u_drift:.3f}, {v_drift:.3f}] m/s, and origin attribution.")
 
     with tab2:
         st.markdown("### 🚢 Regional AIS Transponder Telemetry")
