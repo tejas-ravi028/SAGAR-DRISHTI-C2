@@ -5,3 +5,5 @@ pandas
 scipy
 folium
 streamlit-folium
+Pillow
+requests
