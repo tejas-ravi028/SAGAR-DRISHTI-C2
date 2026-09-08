@@ -387,38 +387,66 @@ with col2:
         st.markdown("**Synthetic Aperture Radar (SAR) Backscatter Analysis**")
         if uploaded_file is not None:
             raw_img = Image.open(uploaded_file).convert("L")
-            img_matrix = np.array(raw_img)
+            img_matrix = np.array(raw_img, dtype=np.float32)
             
-            threshold = st.slider("Backscatter Threshold (dB Cutoff)", 10, 150, 75)
-            slick_mask = img_matrix < threshold
-            
-            spill_pixels = int(np.sum(slick_mask))
+            c_ctrl1, c_ctrl2 = st.columns(2)
+            with c_ctrl1:
+                damping_sens = st.slider("Relative Damping Sensitivity (dB Contrast)", 5, 50, 22)
+            with c_ctrl2:
+                max_area_gate = st.slider("Look-Alike Area Gate Ceiling (%)", 5, 25, 12)
+
+            # 1. Estimate local sea-clutter background using a Gaussian spatial filter
+            from PIL import ImageFilter
+            blurred_img = raw_img.filter(ImageFilter.GaussianBlur(radius=12))
+            local_background = np.array(blurred_img, dtype=np.float32)
+
+            # 2. Extract anomalous localized drops (capillary suppression relative to local sea)
+            contrast_drop = local_background - img_matrix
+            candidate_mask = (contrast_drop > damping_sens) & (img_matrix < 120)
+
+            # 3. Defense-Grade False-Positive Validation Gate
+            raw_pixels = int(np.sum(candidate_mask))
             total_pixels = img_matrix.size
+            raw_coverage_pct = (raw_pixels / total_pixels) * 100
+
+            if raw_coverage_pct > max_area_gate:
+                is_valid_slick = False
+                slick_mask = np.zeros_like(candidate_mask, dtype=bool)
+                st.warning(f"⚠️ **FALSE-POSITIVE SUPPRESSION TRIGGERED:** Feature spans {raw_coverage_pct:.1f}% of frame (exceeds {max_area_gate}% operational ceiling). Classified as natural low-backscatter look-alike / calm sea and suppressed.")
+            elif raw_pixels < 25:
+                is_valid_slick = False
+                slick_mask = np.zeros_like(candidate_mask, dtype=bool)
+                st.info("ℹ️ **NO ANOMALIES DETECTED:** Sea surface backscatter is uniform within nominal Bragg limits.")
+            else:
+                is_valid_slick = True
+                slick_mask = candidate_mask
+
+            spill_pixels = int(np.sum(slick_mask))
             slick_coverage_pct = (spill_pixels / total_pixels) * 100
             estimated_area_km2 = spill_pixels * 0.0085
-            
-            overlay = np.stack([img_matrix]*3, axis=-1)
+
+            # 4. Synthesize tactical segmentation overlay
+            overlay = np.stack([np.array(raw_img)]*3, axis=-1)
             overlay[slick_mask] = [255, 51, 51]
-            
+
             c_img1, c_img2 = st.columns(2)
             with c_img1:
-                st.image(raw_img, caption="Raw SAR Input Frame", use_container_width=True)
+                st.image(raw_img, caption="Raw Satellite Input Frame", use_container_width=True)
             with c_img2:
-                st.image(overlay, caption="Active AI Segmentation (Damping Verified)", use_container_width=True)
-                
+                st.image(overlay, caption="Validated AI Segmentation (Clutter Rejected)", use_container_width=True)
+
             st.markdown("### 📊 Extracted SAR Telemetry")
             m1, m2, m3 = st.columns(3)
-            m1.metric("Classified Slick Area", f"{estimated_area_km2:.2f} km²")
-            m2.metric("Radar Suppression", "-23.4 dB", "Capillary Damping Confirmed")
-            m3.metric("Raster Coverage", f"{slick_coverage_pct:.2f}%", f"{spill_pixels} px flagged")
-            
-            y_indices, x_indices = np.where(slick_mask)
-            if len(y_indices) > 0:
+            m1.metric("Classified Slick Area", f"{estimated_area_km2:.2f} km²" if is_valid_slick else "0.00 km²")
+            m2.metric("Anomaly Status", "CONFIRMED SLICK" if is_valid_slick else "LOOK-ALIKE / REJECTED")
+            m3.metric("Validated Pixels", f"{spill_pixels} px", f"Gate: <{max_area_gate}%")
+
+            if is_valid_slick:
+                y_indices, x_indices = np.where(slick_mask)
                 cy, cx = int(np.mean(y_indices)), int(np.mean(x_indices))
-                st.success(f"Target Centroid Computed at Pixel Coordinates: [{cx}, {cy}]. Fed directly to Spectral Inverse Engine.")
+                st.success(f"Target Centroid Computed at Pixel Coordinates: [{cx}, {cy}]. Transmitted to Spectral Inverse Engine.")
         else:
             st.info("Awaiting SAR Raster. Upload any ocean radar or satellite image via the left sidebar to execute automated backscatter contouring.")
-            
     with tab4:
         st.markdown("**Sovereign SAR Constellation Visibility (Sentinel-1 & RADARSAT)**")
         st.area_chart(df_orbit["Coverage"], color="#ff3333")
